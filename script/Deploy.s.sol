@@ -39,7 +39,7 @@ contract DeployVault is Script {
         console.log("Vault successfully linked to Strategy!");
 
         vm.stopBroadcast();
-
+        //returning the deployed contracts
         return (vault, strategy);
     }
 }

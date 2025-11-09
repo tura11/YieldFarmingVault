@@ -10,12 +10,16 @@ import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockTokenA} from "../mocks/MockTokenA.sol";
 
+/// @title VaultUSDC Invariant Test
+/// @notice Invariant tests for VaultUSDC and its associated strategy.
+/// @dev Uses Foundry invariant testing framework to validate protocol consistency.
 contract VaultUSDCInvariantTest is Test {
     VaultUSDC public vault;
     AaveYieldFarm public strategy;
     ERC20Mock public usdc;
     MockTokenA public aToken;
     MockAavePool public lendingPool;
+
     address public constant OWNER = address(0x1);
     address public constant USER1 = address(0x2);
     address public constant USER2 = address(0x3);
@@ -23,39 +27,45 @@ contract VaultUSDCInvariantTest is Test {
 
     VaultHandler public handler;
 
+    /// @notice Initializes the test environment with mock tokens, vault, and strategy.
     function setUp() public {
-        // Inicjalizacja mocków
+        // === Initialize mocks ===
         usdc = new ERC20Mock();
         aToken = new MockTokenA();
-        // Ustawienie decimals na 6 dla usdc i aToken
-        vm.store(address(usdc), bytes32(uint256(8)), bytes32(uint256(6))); // decimals = 6
-        vm.store(address(aToken), bytes32(uint256(8)), bytes32(uint256(6))); // decimals = 6
+
+        // Force decimals to 6 for both USDC and aToken
+        vm.store(address(usdc), bytes32(uint256(8)), bytes32(uint256(6)));
+        vm.store(address(aToken), bytes32(uint256(8)), bytes32(uint256(6)));
+
+        // Mock Aave Pool (lending pool)
         lendingPool = new MockAavePool(address(usdc), address(aToken));
 
+        // === Deploy Vault and Strategy ===
         vm.startPrank(OWNER);
         vault = new VaultUSDC(usdc);
         strategy = new AaveYieldFarm(address(usdc), address(lendingPool), address(aToken), address(vault));
         vm.stopPrank();
 
-        // Ustawienie strategii w skarbcu
+        // === Connect Vault to Strategy ===
         vm.startPrank(OWNER);
         vault.setStrategy(address(strategy));
 
-        // Przygotowanie handlera
+        // Initialize invariant handler
         handler = new VaultHandler(vault, usdc, strategy, lendingPool);
 
-        // Skierowanie wszystkich wywołań na handler
+        // Direct all invariant fuzz calls to the handler contract
         targetContract(address(handler));
         vm.stopPrank();
 
-        // Przygotowanie użytkowników
+        // === Mint tokens for users and vault ===
         vm.startPrank(OWNER);
-        usdc.mint(USER1, 10_000_000e6); // 10M USDC
-        usdc.mint(USER2, 10_000_000e6); // 10M USDC
-        usdc.mint(USER3, 10_000_000e6); // 10M USDC
-        usdc.mint(address(vault), 1_000_000e6); // Początkowe środki w skarbcu
+        usdc.mint(USER1, 10_000_000e6);
+        usdc.mint(USER2, 10_000_000e6);
+        usdc.mint(USER3, 10_000_000e6);
+        usdc.mint(address(vault), 1_000_000e6);
         vm.stopPrank();
 
+        // === Approve Vault for USDC spending ===
         vm.startPrank(USER1);
         usdc.approve(address(vault), type(uint256).max);
         vm.stopPrank();
@@ -69,15 +79,20 @@ contract VaultUSDCInvariantTest is Test {
         vm.stopPrank();
     }
 
-    // Inwariant: Suma aktywów w skarbcu i strategii = totalAssets()
+    /// @notice Invariant: Vault + Strategy balances must equal `totalAssets()`.
     function invariant_totalAssetsConsistency() public {
         uint256 vaultBalance = usdc.balanceOf(address(vault));
         uint256 strategyBalance = strategy.balanceOf();
         uint256 totalAssets = vault.totalAssets();
-        assertEq(vaultBalance + strategyBalance, totalAssets, "Total assets mismatch");
+
+        assertEq(
+            vaultBalance + strategyBalance,
+            totalAssets,
+            "Invariant violated: Vault + Strategy balances mismatch totalAssets()"
+        );
     }
 
-    // Inwariant: Użytkownik nie może wypłacić więcej, niż ma udziałów
+    /// @notice Invariant: No user can withdraw more assets than they own in shares.
     function invariant_userCannotWithdrawMoreThanBalance() public {
         uint256 user1Shares = vault.balanceOf(USER1);
         uint256 user1Assets = vault.convertToAssets(user1Shares);
@@ -92,31 +107,51 @@ contract VaultUSDCInvariantTest is Test {
         assertLe(user3Assets, totalAssets, "User3 assets exceed total assets");
     }
 
-    // Inwariant: Strategia nie przechowuje więcej, niż zdeponowano (chyba że symulujemy zyski)
+    /// @notice Invariant: Strategy balance must not be less than the total deposited amount.
+    /// @dev Profits may increase the strategy’s balance above the deposited amount.
     function invariant_strategyBalance() public {
         uint256 strategyBalance = strategy.balanceOf();
         uint256 totalDepositedToStrategy = strategy.totalDeposited();
-        // Zyski mogą zwiększyć saldo, więc sprawdzamy czy saldo jest zgodne
-        assertLe(totalDepositedToStrategy, strategyBalance, "Strategy deposited exceeds balance");
+        assertLe(
+            totalDepositedToStrategy,
+            strategyBalance,
+            "Strategy deposited amount exceeds current balance"
+        );
     }
 }
 
+/// @title VaultHandler
+/// @notice Handler for invariant testing of VaultUSDC operations.
+/// @dev Simulates user actions such as deposit, withdraw, rebalancing, and yield generation.
 contract VaultHandler is Test {
     VaultUSDC public vault;
     ERC20Mock public usdc;
     AaveYieldFarm public strategy;
     MockAavePool public lendingPool;
+
     address[] public users = [address(0x2), address(0x3), address(0x4)];
     uint256 public totalDeposited;
     uint256 public totalWithdrawn;
 
-    constructor(VaultUSDC _vault, ERC20Mock _usdc, AaveYieldFarm _strategy, MockAavePool _lendingPool) {
+    /// @param _vault The VaultUSDC contract instance.
+    /// @param _usdc The mock USDC token used for deposits.
+    /// @param _strategy The AaveYieldFarm strategy contract.
+    /// @param _lendingPool The mock Aave lending pool.
+    constructor(
+        VaultUSDC _vault,
+        ERC20Mock _usdc,
+        AaveYieldFarm _strategy,
+        MockAavePool _lendingPool
+    ) {
         vault = _vault;
         usdc = _usdc;
         strategy = _strategy;
         lendingPool = _lendingPool;
     }
 
+    /// @notice Simulates user deposits into the vault.
+    /// @param amount The amount of USDC to deposit.
+    /// @param userIndex Index of user (0–2) performing the action.
     function deposit(uint256 amount, uint256 userIndex) public {
         address user = users[userIndex % users.length];
         amount = bound(amount, 1e6, vault.maxDepositLimit());
@@ -125,11 +160,14 @@ contract VaultHandler is Test {
         try vault.deposit(amount, user) {
             totalDeposited += amount;
         } catch {
-            // Ignorujemy nieudane depozyty
+            // Ignore failed deposits (e.g., paused or exceeded limits)
         }
         vm.stopPrank();
     }
 
+    /// @notice Simulates user withdrawals from the vault.
+    /// @param amount The amount of assets to withdraw.
+    /// @param userIndex Index of user (0–2) performing the action.
     function withdraw(uint256 amount, uint256 userIndex) public {
         address user = users[userIndex % users.length];
         amount = bound(amount, 1e6, vault.maxWithdrawLimit());
@@ -138,70 +176,75 @@ contract VaultHandler is Test {
         try vault.withdraw(amount, user, user) {
             totalWithdrawn += amount;
         } catch {
-            // Ignorujemy nieudane wypłaty
+            // Ignore failed withdrawals
         }
         vm.stopPrank();
     }
 
+    /// @notice Simulates users withdrawing only profits from the vault.
+    /// @param userIndex Index of user (0–2) performing the action.
     function withdrawProfit(uint256 userIndex) public {
         address user = users[userIndex % users.length];
 
         vm.startPrank(user);
         try vault.withdrawProfit(user) {
-            // Zapisujemy wypłatę zysku
+            // Record profit withdrawal (ignored for simplicity)
         } catch {
-            // Ignorujemy nieudane wypłaty zysku
+            // Ignore failed profit withdrawals
         }
         vm.stopPrank();
     }
 
+    /// @notice Simulates rebalancing of the vault by the owner.
     function rebalance() public {
         vm.prank(vault.owner());
         try vault.rebalance() {
-            // Rebalansowanie
+            // Successful rebalance
         } catch {
-            // Ignorujemy nieudane rebalansowanie
+            // Ignore failed rebalances
         }
     }
 
+    /// @notice Simulates yield (profit) generation in the mock lending pool.
+    /// @param amount The simulated profit amount.
     function simulateYield(uint256 amount) public {
-        amount = bound(amount, 0, 100_000e6); // Ograniczamy zysk do rozsądnej wartości
+        amount = bound(amount, 0, 100_000e6);
         vm.prank(vault.owner());
         lendingPool.simulateYield(address(strategy), amount);
     }
 
+    /// @notice Pauses the vault (onlyOwner).
     function pause() public {
         vm.prank(vault.owner());
-        try vault.pause() {
-            // Pauza
-        } catch {
-            // Ignorujemy nieudaną pauzę
-        }
+        try vault.pause() {} catch {}
     }
 
+    /// @notice Unpauses the vault (onlyOwner).
     function unpause() public {
         vm.prank(vault.owner());
-        try vault.unpause() {
-            // Odpauzowanie
-        } catch {
-            // Ignorujemy nieudane odpauzowanie
-        }
+        try vault.unpause() {} catch {}
     }
 
-    function updateVaultParameters(uint256 maxDeposit, uint256 maxWithdraw, uint256 managementFee) public {
+    /// @notice Updates vault parameters like limits and management fee.
+    /// @param maxDeposit New max deposit limit.
+    /// @param maxWithdraw New max withdraw limit.
+    /// @param managementFee New management fee (basis points).
+    function updateVaultParameters(
+        uint256 maxDeposit,
+        uint256 maxWithdraw,
+        uint256 managementFee
+    ) public {
         maxDeposit = bound(maxDeposit, 1e6, 10_000_000e6);
         maxWithdraw = bound(maxWithdraw, 1e6, 1_000_000e6);
         managementFee = bound(managementFee, 0, 1000); // Max 10%
+
         vm.prank(vault.owner());
-        try vault.updateVaultParameters(maxDeposit, maxWithdraw, managementFee) {
-            // Aktualizacja parametrów
-        } catch {
-            // Ignorujemy nieudaną aktualizację
-        }
+        try vault.updateVaultParameters(maxDeposit, maxWithdraw, managementFee) {} catch {}
     }
 
+    /// @notice Returns all simulated user addresses.
+    /// @return Array of users.
     function getUsers() public view returns (address[] memory) {
         return users;
     }
-    
 }

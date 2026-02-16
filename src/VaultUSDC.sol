@@ -189,7 +189,7 @@ contract VaultUSDC is ERC4626, Ownable, Pausable, ReentrancyGuard {
         uint256 assetsAfterFee = assets - assetsFee;
 
         if (assetsFee > 0) {
-            IERC20(asset()).safeTransferFrom(msg.sender, owner(), assetsFee);
+            IERC20(asset()).safeTransferFrom(msg.sender, owner(), assetsFee);//audit-low, what if owner has no receive or fallback fucntiuon?? better pull over push.
             totalFeesCollected += assetsFee;
         }
 
@@ -216,9 +216,8 @@ contract VaultUSDC is ERC4626, Ownable, Pausable, ReentrancyGuard {
     /**
      * @notice Rebalances vault funds to strategy to maintain target liquidity
      * @dev Sends excess funds above target liquidity to the strategy contract
-     * @dev WARNING: This function should be internal, not public
      */
-    function _rebalanceToStrategy() public {
+    function _rebalanceToStrategy() public {audith-high, should be intreal
         if (strategy == address(0)) {
             revert VaultUSDC__NoStrategySet();
         }
@@ -278,7 +277,7 @@ contract VaultUSDC is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
         // Burn shares and transfer assets
         _burn(shareOwner, shares);
-        IERC20(asset()).safeTransfer(receiver, assets);
+        IERC20(asset()).safeTransfer(receiver, assets);//audit-gigh possibility of reentrancy
 
         if (totalDeposited >= assets) {
             totalDeposited -= assets;
@@ -301,9 +300,8 @@ contract VaultUSDC is ERC4626, Ownable, Pausable, ReentrancyGuard {
      * @notice Withdraws specified amount from the strategy
      * @param amount Amount of assets to withdraw from strategy
      * @dev Reverts if strategy doesn't have sufficient liquidity
-     * @dev WARNING: This function should be internal, not public
      */
-    function _withdrawFromStrategy(uint256 amount) public {
+    function _withdrawFromStrategy(uint256 amount) public {//audith-high, should be intreal
         if (strategy == address(0)) {
             revert VaultUSDC__NoStrategySet();
         }
@@ -318,9 +316,8 @@ contract VaultUSDC is ERC4626, Ownable, Pausable, ReentrancyGuard {
     /**
      * @notice Checks if vault liquidity is below threshold and rebalances from strategy
      * @dev Pulls funds from strategy if current liquidity ratio falls below minimum threshold
-     * @dev WARNING: This function should be internal, not public
      */
-    function _checkAndRebalanceFromStrategy() public {
+    function _checkAndRebalanceFromStrategy() public {//audith-high, should be intreal 
         if (strategy == address(0)) {
             revert VaultUSDC__NoStrategySet();
         }

@@ -47,7 +47,6 @@ contract AaveYieldFarm is IStrategy, Ownable, ReentrancyGuard {
         vault = _vault;
         active = true;
 
-        // Approve Aave pool raz na zawsze
         assetToken.approve(_lendingPool, type(uint256).max);
     }
 
@@ -61,7 +60,7 @@ contract AaveYieldFarm is IStrategy, Ownable, ReentrancyGuard {
 
         assetToken.safeTransferFrom(vault, address(this), amount);
 
-        // 2. Deposit do Aave
+        // 2. Deposit to Aave
         lendingPool.deposit(address(assetToken), amount, address(this), 0);
 
         // 3. Update tracking
